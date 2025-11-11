@@ -15,6 +15,7 @@ import {
   Activity, Heart, Brain, TrendingUp, Zap, Sparkles, 
   BarChart3, Clock, AlertCircle, CheckCircle2, Info
 } from "lucide-react";
+import { analyzeStress as apiAnalyzeStress, DUMMY_THINGSPEAK_URL } from "@/lib/api";
 
 interface MinuteResult {
   minute: number;
@@ -51,9 +52,6 @@ const STRESS_LABELS = {
   2: "High Stress",
 };
 
-// Dummy ThingSpeak URL for testing
-const DUMMY_THINGSPEAK_URL = "http://localhost:8000/dummy-thingspeak";
-
 export default function Dashboard() {
   const [minutes, setMinutes] = useState<number>(10);
   const [thingspeakUrl, setThingSpeakUrl] = useState<string>("");
@@ -70,28 +68,11 @@ export default function Dashboard() {
     setAnalysisData(null); // Clear previous results
     
     try {
-      const response = await fetch("http://localhost:8000/analyze", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          minutes: minutes,
-          thingspeak_url: thingspeakUrl.trim(),
-          use_dummy_data: false, // Always use the provided URL
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || "Analysis failed");
-      }
-
-      const data: AnalysisResponse = await response.json();
+      const data = await apiAnalyzeStress(minutes, thingspeakUrl);
       setAnalysisData(data);
     } catch (error) {
       console.error("Error analyzing stress:", error);
-      alert(`Error: ${error instanceof Error ? error.message : "Failed to analyze stress. Please check your ThingSpeak URL and try again."}`);
+      alert(`Error: ${error instanceof Error ? error.message : "Failed to analyze stress. Please check your ThingSpeak URL and backend connection."}`);
     } finally {
       setLoading(false);
     }

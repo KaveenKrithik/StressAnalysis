@@ -329,6 +329,58 @@ The application features a Linear-inspired design with:
 - API Documentation: http://localhost:8000/docs
 - Dummy ThingSpeak Endpoint: http://localhost:8000/dummy-thingspeak
 
+## Deployment
+
+### Important Notes
+
+- Vercel only hosts the frontend (Next.js)
+- The backend (FastAPI) must be deployed separately on Railway, Render, or similar platform
+- Deploy the backend first, then configure the frontend with the backend URL
+
+### Backend Deployment (Railway - Recommended)
+
+1. Go to [Railway](https://railway.app) and create a new project
+2. Connect your GitHub repository
+3. Add a new service and select "GitHub Repo"
+4. Set the root directory to `backend`
+5. Railway will automatically detect Python and install dependencies
+6. The backend will be available at a URL like `https://your-app.railway.app`
+7. Note the backend URL for frontend configuration
+
+### Backend Deployment (Render)
+
+1. Go to [Render](https://render.com) and create a new Web Service
+2. Connect your GitHub repository
+3. Configure:
+   - Root Directory: `backend`
+   - Build Command: `pip install -r requirements.txt`
+   - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - Environment: Python 3
+4. Deploy and note the backend URL
+
+### Frontend Deployment (Vercel)
+
+1. Push your code to GitHub
+2. Go to [Vercel](https://vercel.com) and import your repository
+3. Vercel will automatically detect Next.js
+4. Before deploying, add environment variables in Vercel settings:
+   - `NEXT_PUBLIC_API_URL`: Your deployed backend URL (e.g., `https://your-app.railway.app`)
+   - `NEXT_PUBLIC_DUMMY_THINGSPEAK_URL`: Your backend URL + `/dummy-thingspeak`
+5. Deploy the frontend
+6. Your app will be available at `https://your-project.vercel.app`
+
+For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md)
+
+## Environment Variables
+
+### Frontend (Vercel)
+- `NEXT_PUBLIC_API_URL`: Backend API URL (required for production)
+- `NEXT_PUBLIC_DUMMY_THINGSPEAK_URL`: Dummy endpoint URL (optional)
+
+### Backend (Railway/Render)
+- No special environment variables required
+- Port is automatically set by the platform
+
 ## License
 
 This project is for research and educational purposes.
