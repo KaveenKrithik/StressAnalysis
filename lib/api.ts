@@ -32,3 +32,24 @@ export async function checkHealth() {
   }
 }
 
+export async function analyzeLatestMinute(thingspeakUrl: string) {
+  const response = await fetch(`${API_URL}/analyze-latest`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      minutes: 1,
+      thingspeak_url: thingspeakUrl.trim(),
+      use_dummy_data: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Analysis failed');
+  }
+
+  return response.json();
+}
+

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,9 +13,10 @@ import {
 } from "recharts";
 import { 
   Activity, Heart, Brain, TrendingUp, Zap, Sparkles, 
-  BarChart3, Clock, AlertCircle, CheckCircle2, Info
+  BarChart3, Clock, AlertCircle, CheckCircle2, Info,
+  Play, Square, Radio
 } from "lucide-react";
-import { analyzeStress as apiAnalyzeStress, DUMMY_THINGSPEAK_URL } from "@/lib/api";
+import { analyzeStress as apiAnalyzeStress, analyzeLatestMinute, DUMMY_THINGSPEAK_URL } from "@/lib/api";
 
 interface MinuteResult {
   minute: number;
@@ -57,11 +58,97 @@ export default function Dashboard() {
   const [thingspeakUrl, setThingSpeakUrl] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [analysisData, setAnalysisData] = useState<AnalysisResponse | null>(null);
+  const [isMonitoring, setIsMonitoring] = useState<boolean>(false);
+  const [liveData, setLiveData] = useState<MinuteResult[]>([]);
+  const monitoringIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [currentMinute, setCurrentMinute] = useState<number>(0);
+
+  // Real-time monitoring effect
+  useEffect(() => {
+    if (isMonitoring && thingspeakUrl.trim()) {
+      // Start monitoring - fetch data every minute
+      const fetchLatestData = async () => {
+        try {
+          const response = await analyzeLatestMinute(thingspeakUrl);
+          const newResult = response.result;
+          
+          // Use sequential minute numbering for live data
+          setLiveData((prev) => {
+            // Always add as a new data point (every fetch is a new minute in live monitoring)
+            // Use sequential numbering starting from 1
+            const newMinuteNumber = prev.length + 1;
+            return [...prev, { ...newResult, minute: newMinuteNumber }];
+          });
+          
+          // Update current minute counter
+          setCurrentMinute((prev) => prev + 1);
+        } catch (error) {
+          console.error("Error fetching latest data:", error);
+        }
+      };
+
+      // Fetch immediately
+      fetchLatestData();
+      
+      // Then fetch every 60 seconds (60000ms)
+      monitoringIntervalRef.current = setInterval(fetchLatestData, 60000);
+      
+      return () => {
+        if (monitoringIntervalRef.current) {
+          clearInterval(monitoringIntervalRef.current);
+        }
+      };
+    } else {
+      // Stop monitoring
+      if (monitoringIntervalRef.current) {
+        clearInterval(monitoringIntervalRef.current);
+        monitoringIntervalRef.current = null;
+      }
+    }
+  }, [isMonitoring, thingspeakUrl]);
+
+  // Update analysisData when liveData changes
+  useEffect(() => {
+    if (isMonitoring && liveData.length > 0) {
+      const stressedCount = liveData.filter((d) => d.numeric_label > 0).length;
+      setAnalysisData({
+        results: liveData,
+        stress_score: `${stressedCount}/${liveData.length}`,
+        total_minutes: liveData.length,
+        stressed_minutes: stressedCount,
+        oxygen_levels: liveData.map((r) => r.oxygen_level),
+      });
+    }
+  }, [liveData, isMonitoring]);
+
+  const startMonitoring = async () => {
+    if (!thingspeakUrl.trim()) {
+      alert("Please enter a ThingSpeak URL to start monitoring");
+      return;
+    }
+
+    setIsMonitoring(true);
+    setLiveData([]); // Clear previous live data
+    setAnalysisData(null); // Clear previous analysis
+  };
+
+  const stopMonitoring = () => {
+    setIsMonitoring(false);
+    if (monitoringIntervalRef.current) {
+      clearInterval(monitoringIntervalRef.current);
+      monitoringIntervalRef.current = null;
+    }
+  };
 
   const analyzeStress = async () => {
     if (!thingspeakUrl.trim()) {
       alert("Please enter a ThingSpeak URL");
       return;
+    }
+
+    // Stop monitoring if active
+    if (isMonitoring) {
+      stopMonitoring();
     }
 
     setLoading(true);
@@ -262,23 +349,57 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
-            <Button
-              onClick={analyzeStress}
-              disabled={loading || !thingspeakUrl.trim()}
-              className="w-full h-11 bg-[#5e6ad2] hover:bg-[#525dc7] text-white font-medium rounded-md transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#5e6ad2] hover:shadow-[0_2px_8px_rgba(94,106,210,0.3)] active:scale-[0.98] border-0"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Analyzing...
-                </span>
+            <div className="flex gap-3">
+              <Button
+                onClick={analyzeStress}
+                disabled={loading || !thingspeakUrl.trim() || isMonitoring}
+                className="flex-1 h-11 bg-[#5e6ad2] hover:bg-[#525dc7] text-white font-medium rounded-md transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#5e6ad2] hover:shadow-[0_2px_8px_rgba(94,106,210,0.3)] active:scale-[0.98] border-0"
+              >
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Analyzing...
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    <Zap className="w-4 h-4" />
+                    Analyze
+                  </span>
+                )}
+              </Button>
+              
+              {!isMonitoring ? (
+                <Button
+                  onClick={startMonitoring}
+                  disabled={!thingspeakUrl.trim() || loading}
+                  className="h-11 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-md transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_2px_8px_rgba(16,185,129,0.3)] active:scale-[0.98] border-0"
+                >
+                  <span className="flex items-center justify-center gap-2">
+                    <Play className="w-4 h-4" />
+                    Start Live
+                  </span>
+                </Button>
               ) : (
-                <span className="flex items-center justify-center gap-2">
-                  <Zap className="w-4 h-4" />
-                  Start Analysis
-                </span>
+                <Button
+                  onClick={stopMonitoring}
+                  className="h-11 px-6 bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-all duration-150 hover:shadow-[0_2px_8px_rgba(239,68,68,0.3)] active:scale-[0.98] border-0"
+                >
+                  <span className="flex items-center justify-center gap-2">
+                    <Square className="w-4 h-4" />
+                    Stop
+                  </span>
+                </Button>
               )}
-            </Button>
+            </div>
+            
+            {isMonitoring && (
+              <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-md animate-pulse">
+                <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+                <span className="text-sm text-emerald-400 font-medium">
+                  Live monitoring active - Updates every minute ({liveData.length} minutes collected)
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
