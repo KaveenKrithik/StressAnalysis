@@ -144,12 +144,20 @@ def fetch_thingspeak_data(thingspeak_url: str, allow_dummy: bool = False):
     # Check if it's a valid ThingSpeak URL or localhost (for development)
     # Allow localhost for development, but require thingspeak.com for production URLs
     is_localhost = 'localhost' in thingspeak_url or '127.0.0.1' in thingspeak_url
-    is_thingspeak = 'thingspeak.com' in thingspeak_url
     
+    # More strict ThingSpeak validation - must be exactly api.thingspeak.com or thingspeak.com domain
+    url_lower = thingspeak_url.lower()
+    is_thingspeak = (
+        'api.thingspeak.com' in url_lower or 
+        url_lower.startswith('https://thingspeak.com/') or
+        url_lower.startswith('http://thingspeak.com/')
+    )
+    
+    # If it's not localhost and not a valid ThingSpeak URL, reject it immediately
     if not is_localhost and not is_thingspeak:
         raise ValueError(
-            f"Invalid ThingSpeak URL: URL must be from thingspeak.com or localhost (for development). "
-            f"Got: {thingspeak_url[:50]}. Please provide a valid ThingSpeak channel URL."
+            f"Invalid ThingSpeak URL: URL must be from thingspeak.com (e.g., https://api.thingspeak.com/channels/...). "
+            f"Received: {thingspeak_url[:80]}. Please provide a valid ThingSpeak channel URL."
         )
     
     try:
@@ -201,25 +209,53 @@ def fetch_thingspeak_data(thingspeak_url: str, allow_dummy: bool = False):
             })
             return df
         else:
-            raise ValueError("Invalid ThingSpeak response format: 'feeds' key not found in response")
+            # If 'feeds' key is not found, this is likely not a ThingSpeak URL
+            raise ValueError(
+                f"Invalid ThingSpeak response: The URL does not appear to be a valid ThingSpeak channel. "
+                f"ThingSpeak channels should return data with a 'feeds' key. "
+                f"Received URL: {thingspeak_url[:80]}. Please check the URL and try again."
+            )
     except requests.exceptions.Timeout:
-        raise ValueError(f"Request timeout: Could not fetch data from {thingspeak_url[:50]} within 10 seconds")
-    except requests.exceptions.ConnectionError:
-        raise ValueError(f"Connection error: Could not connect to {thingspeak_url[:50]}. Please check if the URL is correct.")
+        raise ValueError(
+            f"Request timeout: Could not fetch data from {thingspeak_url[:50]} within 10 seconds. "
+            f"Please check if the URL is correct and the server is accessible."
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise ValueError(
+            f"Connection error: Could not connect to {thingspeak_url[:50]}. "
+            f"This might not be a valid ThingSpeak URL. Error: {str(e)}. "
+            f"Please verify the URL is correct."
+        )
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            raise ValueError(f"ThingSpeak channel not found (404): {thingspeak_url[:50]}. Please check if the channel ID is correct.")
-        elif e.response.status_code == 403:
-            raise ValueError(f"Access denied (403): {thingspeak_url[:50]}. The channel may be private. Please check channel settings.")
+        status_code = e.response.status_code if e.response else 0
+        if status_code == 404:
+            raise ValueError(
+                f"ThingSpeak channel not found (404): {thingspeak_url[:50]}. "
+                f"Please check if the channel ID is correct and the channel exists."
+            )
+        elif status_code == 403:
+            raise ValueError(
+                f"Access denied (403): {thingspeak_url[:50]}. "
+                f"The channel may be private. Please check channel settings or use a public channel."
+            )
         else:
-            raise ValueError(f"HTTP error {e.response.status_code}: Could not fetch data from {thingspeak_url[:50]}")
+            raise ValueError(
+                f"HTTP error {status_code}: Could not fetch data from {thingspeak_url[:50]}. "
+                f"This might not be a valid ThingSpeak channel URL."
+            )
     except requests.exceptions.RequestException as e:
-        raise ValueError(f"Request error: Could not fetch data from {thingspeak_url[:50]}. Error: {str(e)}")
+        raise ValueError(
+            f"Request error: Could not fetch data from {thingspeak_url[:50]}. "
+            f"Error: {str(e)}. This might not be a valid ThingSpeak URL."
+        )
     except ValueError as e:
-        # Re-raise ValueError as-is
+        # Re-raise ValueError as-is (already formatted)
         raise
     except Exception as e:
-        raise ValueError(f"Unexpected error fetching ThingSpeak data: {str(e)}")
+        raise ValueError(
+            f"Unexpected error fetching ThingSpeak data from {thingspeak_url[:50]}: {str(e)}. "
+            f"Please verify this is a valid ThingSpeak channel URL."
+        )
 
 # -----------------------------
 class AnalysisRequest(BaseModel):
@@ -250,7 +286,11 @@ async def analyze_stress(request: AnalysisRequest):
         if request.thingspeak_url:
             # Check if it's the dummy endpoint
             allow_dummy = 'dummy-thingspeak' in request.thingspeak_url or 'localhost:8000/dummy-thingspeak' in request.thingspeak_url
-            df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
+            try:
+                df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
+            except ValueError as e:
+                # Convert validation errors to HTTP 400 Bad Request
+                raise HTTPException(status_code=400, detail=str(e))
         
         # Only use dummy data if explicitly allowed (dummy endpoint) or if use_dummy_data is True
         if df is None:
@@ -361,7 +401,14 @@ async def analyze_stress(request: AnalysisRequest):
             oxygen_levels=oxygen_levels
         )
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (400, etc.) as-is
+        raise
+    except ValueError as e:
+        # Convert ValueError to 400 Bad Request
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Other exceptions are 500 Internal Server Error
         raise HTTPException(status_code=500, detail=f"Analysis error: {str(e)}")
 
 @app.get("/health")
@@ -377,7 +424,11 @@ async def analyze_latest_minute(request: AnalysisRequest):
         if request.thingspeak_url:
             # Check if it's the dummy endpoint
             allow_dummy = 'dummy-thingspeak' in request.thingspeak_url or 'localhost:8000/dummy-thingspeak' in request.thingspeak_url
-            df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
+            try:
+                df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
+            except ValueError as e:
+                # Convert validation errors to HTTP 400 Bad Request
+                raise HTTPException(status_code=400, detail=str(e))
         
         # Only use dummy data if explicitly allowed (dummy endpoint) or if use_dummy_data is True
         if df is None:
@@ -511,7 +562,14 @@ async def analyze_latest_minute(request: AnalysisRequest):
             "timestamp": datetime.now().isoformat(),
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (400, etc.) as-is
+        raise
+    except ValueError as e:
+        # Convert ValueError to 400 Bad Request
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Other exceptions are 500 Internal Server Error
         raise HTTPException(status_code=500, detail=f"Analysis error: {str(e)}")
 
 @app.get("/dummy-thingspeak")
