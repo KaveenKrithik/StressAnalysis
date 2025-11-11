@@ -111,14 +111,48 @@ def generate_dummy_data(minutes: int):
     return df
 
 # -----------------------------
-def fetch_thingspeak_data(thingspeak_url: str):
-    """Fetch data from ThingSpeak API or dummy endpoint"""
+def fetch_thingspeak_data(thingspeak_url: str, allow_dummy: bool = False):
+    """Fetch data from ThingSpeak API or dummy endpoint
+    
+    Args:
+        thingspeak_url: URL to fetch data from
+        allow_dummy: If True, allows dummy endpoint URLs. If False, raises error for invalid URLs.
+    
+    Returns:
+        DataFrame with HR and EDA data
+    
+    Raises:
+        ValueError: If URL is invalid or data cannot be fetched
+        requests.RequestException: If HTTP request fails
+    """
+    # Validate URL format
+    if not thingspeak_url or not isinstance(thingspeak_url, str):
+        raise ValueError("Invalid ThingSpeak URL: URL is empty or invalid")
+    
+    # Check if it's our dummy endpoint
+    if 'dummy-thingspeak' in thingspeak_url:
+        if allow_dummy:
+            # This is the dummy endpoint, return None to trigger dummy data generation
+            return None
+        else:
+            raise ValueError("Dummy endpoint is not allowed. Please provide a valid ThingSpeak URL.")
+    
+    # Validate URL format (basic check)
+    if not thingspeak_url.startswith(('http://', 'https://')):
+        raise ValueError(f"Invalid URL format: URL must start with http:// or https://. Got: {thingspeak_url[:50]}")
+    
+    # Check if it's a valid ThingSpeak URL or localhost (for development)
+    # Allow localhost for development, but require thingspeak.com for production URLs
+    is_localhost = 'localhost' in thingspeak_url or '127.0.0.1' in thingspeak_url
+    is_thingspeak = 'thingspeak.com' in thingspeak_url
+    
+    if not is_localhost and not is_thingspeak:
+        raise ValueError(
+            f"Invalid ThingSpeak URL: URL must be from thingspeak.com or localhost (for development). "
+            f"Got: {thingspeak_url[:50]}. Please provide a valid ThingSpeak channel URL."
+        )
+    
     try:
-        # Check if it's our dummy endpoint
-        if 'dummy-thingspeak' in thingspeak_url or 'localhost:8000' in thingspeak_url:
-            # Use dummy data generation instead
-            return None  # Will trigger dummy data generation
-        
         response = requests.get(thingspeak_url, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -126,11 +160,38 @@ def fetch_thingspeak_data(thingspeak_url: str):
         # Parse ThingSpeak response (adjust based on your channel structure)
         if 'feeds' in data:
             feeds = data['feeds']
-            hr_data = [float(feed.get('field1', 70)) for feed in feeds if feed.get('field1')]
-            eda_data = [float(feed.get('field2', 5)) for feed in feeds if feed.get('field2')]
+            if not feeds or len(feeds) == 0:
+                raise ValueError("ThingSpeak channel has no data (empty feeds)")
+            
+            hr_data = []
+            eda_data = []
+            
+            for feed in feeds:
+                field1 = feed.get('field1')
+                field2 = feed.get('field2')
+                
+                if field1 is not None:
+                    try:
+                        hr_data.append(float(field1))
+                    except (ValueError, TypeError):
+                        continue
+                
+                if field2 is not None:
+                    try:
+                        eda_data.append(float(field2))
+                    except (ValueError, TypeError):
+                        continue
+            
+            if len(hr_data) == 0:
+                raise ValueError("ThingSpeak channel has no Heart Rate (field1) data")
+            if len(eda_data) == 0:
+                raise ValueError("ThingSpeak channel has no EDA (field2) data")
             
             # Ensure both arrays have the same length
             min_len = min(len(hr_data), len(eda_data))
+            if min_len == 0:
+                raise ValueError("ThingSpeak channel has insufficient data")
+            
             hr_data = hr_data[:min_len]
             eda_data = eda_data[:min_len]
             
@@ -140,11 +201,25 @@ def fetch_thingspeak_data(thingspeak_url: str):
             })
             return df
         else:
-            raise ValueError("Invalid ThingSpeak response format")
+            raise ValueError("Invalid ThingSpeak response format: 'feeds' key not found in response")
+    except requests.exceptions.Timeout:
+        raise ValueError(f"Request timeout: Could not fetch data from {thingspeak_url[:50]} within 10 seconds")
+    except requests.exceptions.ConnectionError:
+        raise ValueError(f"Connection error: Could not connect to {thingspeak_url[:50]}. Please check if the URL is correct.")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            raise ValueError(f"ThingSpeak channel not found (404): {thingspeak_url[:50]}. Please check if the channel ID is correct.")
+        elif e.response.status_code == 403:
+            raise ValueError(f"Access denied (403): {thingspeak_url[:50]}. The channel may be private. Please check channel settings.")
+        else:
+            raise ValueError(f"HTTP error {e.response.status_code}: Could not fetch data from {thingspeak_url[:50]}")
+    except requests.exceptions.RequestException as e:
+        raise ValueError(f"Request error: Could not fetch data from {thingspeak_url[:50]}. Error: {str(e)}")
+    except ValueError as e:
+        # Re-raise ValueError as-is
+        raise
     except Exception as e:
-        # If fetching fails, return None to trigger dummy data generation
-        print(f"Warning: Could not fetch ThingSpeak data: {str(e)}. Using dummy data.")
-        return None
+        raise ValueError(f"Unexpected error fetching ThingSpeak data: {str(e)}")
 
 # -----------------------------
 class AnalysisRequest(BaseModel):
@@ -170,14 +245,28 @@ class AnalysisResponse(BaseModel):
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_stress(request: AnalysisRequest):
     try:
-        # Get data - try ThingSpeak first, fallback to dummy data
+        # Get data - try ThingSpeak first
         df = None
         if request.thingspeak_url:
-            df = fetch_thingspeak_data(request.thingspeak_url)
+            # Check if it's the dummy endpoint
+            allow_dummy = 'dummy-thingspeak' in request.thingspeak_url or 'localhost:8000/dummy-thingspeak' in request.thingspeak_url
+            df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
         
-        # If fetching failed or no URL provided, use dummy data
+        # Only use dummy data if explicitly allowed (dummy endpoint) or if use_dummy_data is True
+        if df is None:
+            if request.use_dummy_data or (request.thingspeak_url and 'dummy-thingspeak' in request.thingspeak_url):
+                df = generate_dummy_data(request.minutes)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not fetch data from ThingSpeak URL. Please provide a valid ThingSpeak channel URL or enable dummy data mode."
+                )
+        
         if df is None or len(df) == 0:
-            df = generate_dummy_data(request.minutes)
+            raise HTTPException(
+                status_code=400,
+                detail="No data available. The ThingSpeak channel is empty or has no data."
+            )
         
         # Process data
         df['IBI'] = np.round(60000 / df['HR'], 6)
@@ -283,14 +372,28 @@ async def health_check():
 async def analyze_latest_minute(request: AnalysisRequest):
     """Analyze the latest minute of data for real-time monitoring"""
     try:
-        # Get data - try ThingSpeak first, fallback to dummy data
+        # Get data - try ThingSpeak first
         df = None
         if request.thingspeak_url:
-            df = fetch_thingspeak_data(request.thingspeak_url)
+            # Check if it's the dummy endpoint
+            allow_dummy = 'dummy-thingspeak' in request.thingspeak_url or 'localhost:8000/dummy-thingspeak' in request.thingspeak_url
+            df = fetch_thingspeak_data(request.thingspeak_url, allow_dummy=allow_dummy)
         
-        # If fetching failed or no URL provided, use dummy data
+        # Only use dummy data if explicitly allowed (dummy endpoint) or if use_dummy_data is True
+        if df is None:
+            if request.use_dummy_data or (request.thingspeak_url and 'dummy-thingspeak' in request.thingspeak_url):
+                df = generate_dummy_data(1)  # Generate just 1 minute for latest
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not fetch data from ThingSpeak URL. Please provide a valid ThingSpeak channel URL or enable dummy data mode."
+                )
+        
         if df is None or len(df) == 0:
-            df = generate_dummy_data(1)  # Generate just 1 minute for latest
+            raise HTTPException(
+                status_code=400,
+                detail="No data available. The ThingSpeak channel is empty or has no data."
+            )
         
         # Process data
         df['IBI'] = np.round(60000 / df['HR'], 6)

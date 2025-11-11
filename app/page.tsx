@@ -84,6 +84,24 @@ export default function Dashboard() {
           setCurrentMinute((prev) => prev + 1);
         } catch (error) {
           console.error("Error fetching latest data:", error);
+          const errorMessage = error instanceof Error ? error.message : "Failed to fetch latest data";
+          
+          // If it's an invalid URL error, stop monitoring
+          if (errorMessage.includes("Invalid ThingSpeak URL") || 
+              errorMessage.includes("Invalid URL format") ||
+              errorMessage.includes("ThingSpeak channel not found") ||
+              errorMessage.includes("Connection error")) {
+            // Stop monitoring on URL errors
+            setIsMonitoring(false);
+            if (monitoringIntervalRef.current) {
+              clearInterval(monitoringIntervalRef.current);
+              monitoringIntervalRef.current = null;
+            }
+            alert(`Monitoring stopped: ${errorMessage}\n\nPlease check your ThingSpeak URL and try again.`);
+          } else {
+            // For other errors, log but continue monitoring
+            console.warn(`Monitoring error: ${errorMessage}`);
+          }
         }
       };
 
@@ -159,7 +177,9 @@ export default function Dashboard() {
       setAnalysisData(data);
     } catch (error) {
       console.error("Error analyzing stress:", error);
-      alert(`Error: ${error instanceof Error ? error.message : "Failed to analyze stress. Please check your ThingSpeak URL and backend connection."}`);
+      const errorMessage = error instanceof Error ? error.message : "Failed to analyze stress. Please check your ThingSpeak URL and backend connection.";
+      alert(`Error: ${errorMessage}\n\nPlease ensure you're using a valid ThingSpeak channel URL or the dummy endpoint for testing.`);
+      setAnalysisData(null); // Clear any partial data
     } finally {
       setLoading(false);
     }
