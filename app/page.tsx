@@ -62,11 +62,13 @@ export default function Dashboard() {
   const [liveData, setLiveData] = useState<MinuteResult[]>([]);
   const monitoringIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [currentMinute, setCurrentMinute] = useState<number>(0);
+  const [monitoringStartTime, setMonitoringStartTime] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
   // Real-time monitoring effect
   useEffect(() => {
     if (isMonitoring && thingspeakUrl.trim()) {
-      // Start monitoring - fetch data every minute
+      // Start monitoring - fetch data every 10 seconds for more responsive updates
       const fetchLatestData = async () => {
         try {
           const response = await analyzeLatestMinute(thingspeakUrl);
@@ -97,6 +99,7 @@ export default function Dashboard() {
               clearInterval(monitoringIntervalRef.current);
               monitoringIntervalRef.current = null;
             }
+            setMonitoringStartTime(null);
             alert(`Monitoring stopped: ${errorMessage}\n\nPlease check your ThingSpeak URL and try again.`);
           } else {
             // For other errors, log but continue monitoring
@@ -105,11 +108,16 @@ export default function Dashboard() {
         }
       };
 
+      // Set start time
+      setMonitoringStartTime(Date.now());
+      setElapsedSeconds(0);
+      
       // Fetch immediately
       fetchLatestData();
       
-      // Then fetch every 60 seconds (60000ms)
-      monitoringIntervalRef.current = setInterval(fetchLatestData, 60000);
+      // Then fetch every 10 seconds (10000ms) for more responsive updates
+      // This gives 6 data points per minute, but we'll still number them as minutes
+      monitoringIntervalRef.current = setInterval(fetchLatestData, 10000);
       
       return () => {
         if (monitoringIntervalRef.current) {
@@ -122,8 +130,22 @@ export default function Dashboard() {
         clearInterval(monitoringIntervalRef.current);
         monitoringIntervalRef.current = null;
       }
+      setMonitoringStartTime(null);
+      setElapsedSeconds(0);
     }
   }, [isMonitoring, thingspeakUrl]);
+
+  // Timer effect to show elapsed time
+  useEffect(() => {
+    if (isMonitoring && monitoringStartTime) {
+      const timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - monitoringStartTime) / 1000);
+        setElapsedSeconds(elapsed);
+      }, 1000);
+      
+      return () => clearInterval(timerInterval);
+    }
+  }, [isMonitoring, monitoringStartTime]);
 
   // Update analysisData when liveData changes
   useEffect(() => {
@@ -148,6 +170,8 @@ export default function Dashboard() {
     setIsMonitoring(true);
     setLiveData([]); // Clear previous live data
     setAnalysisData(null); // Clear previous analysis
+    setCurrentMinute(0);
+    setElapsedSeconds(0);
   };
 
   const stopMonitoring = () => {
@@ -413,10 +437,11 @@ export default function Dashboard() {
             </div>
             
             {isMonitoring && (
-              <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-md animate-pulse">
+              <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-md">
                 <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
                 <span className="text-sm text-emerald-400 font-medium">
-                  Live monitoring active - Updates every minute ({liveData.length} minutes collected)
+                  Live monitoring active - {liveData.length} data point{liveData.length !== 1 ? 's' : ''} collected
+                  {elapsedSeconds > 0 && ` (${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s elapsed)`}
                 </span>
               </div>
             )}
